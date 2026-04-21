@@ -31,7 +31,7 @@ def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False):
     return activity
 
 
-class Activity:
+class HtrsActivity:
     '''
     Class representing the visual activity metrics for a hive at a specific timestamp.
     Contains activity values for all heaters across the four RPis, as well as aggregated activity per ihl.
@@ -42,7 +42,7 @@ class Activity:
     '''
     def __init__(self, ts:pd.Timestamp, activity_values:list[dict]):
         '''
-        Creates an Activity object.
+        Creates an HtrsActivity object.
 
         Nones in activity_values will spread to yield np.NaN in all heaters in self.htr_activity.
         '''
@@ -90,7 +90,7 @@ class Activity:
 
         return aggregated_activity
 
-def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->Activity: # TODO: test this function
+def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity: # TODO: test this function
     '''
     Computes the visual activity between two Hive objects for the specified ihl and heater.
 
@@ -99,7 +99,7 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     :param threshold: int, pixel difference threshold to consider as activity
     :param ihl: str, either "upper" or "lower"
     :param htr: str, heater number (e.g., "h00", "h01", ..., "h09")
-    :return activity: Activity object containing the activity values
+    :return activity: HtrsActivity object containing the activity values
     '''
     assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
     assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
@@ -131,17 +131,17 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
         rpi_activity = {htr: htr_activity}
         activity_values.append(rpi_activity)
 
-    _activity = Activity(ts=hive2.ts, activity_values=activity_values)
+    _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
 
-def computeActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False)->Activity: # TODO: test this function
+def computeHtrsActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False)->HtrsActivity: # TODO: test this function
     '''
     Computes the visual activity between two Hive objects for all four RPis images and all heaters within each RPi.
 
     :param hive1: Hive object at time t1
     :param hive2: Hive object at time t2, which will fix the ts of the activity
     :param threshold: int, pixel difference threshold to consider as activity
-    :return activity: Activity object containing the activity values
+    :return activity: HtrsActivity object containing the activity values
     '''
     assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
     assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
@@ -169,11 +169,11 @@ def computeActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False)->
 
         activity_values.append(rpi_activity)
 
-    _activity = Activity(ts=hive2.ts, activity_values=activity_values)
+    _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
 
 @delayed
-def computeSignatureActivity(sig:Signature, img_paths:pd.DataFrame, duration:int)->tuple[list[Activity], list[Activity]]:
+def computeSignatureActivity(sig:Signature, img_paths:pd.DataFrame, duration:int)->tuple[list[HtrsActivity], list[HtrsActivity]]:
     '''
     Computes the visual activity for a given signature before and after the signature.
     Warning: This function assumes that image frequency is 1 minute.
@@ -228,7 +228,7 @@ def plotActivities(activities:pd.DataFrame, deltaT:float, ihl:str, alternative_t
     This function assumes that the image frequency is 1min.
 
     :param activities: df with activities of a specific hive and exp. deltaT, ihl and htr should be columns. 
-    sig_activities is the column that contains the tuple of Activity lists as values
+    sig_activities is the column that contains the tuple of HtrsActivity lists as values
     :param ihl: str, either "upper" or "lower"
     :param deltaT: float, the deltaT value to plot
     '''
