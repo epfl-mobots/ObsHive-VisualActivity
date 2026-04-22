@@ -5,7 +5,7 @@ Author: Cyril Monette
 Initial date: 14/11/2025
 '''
 
-from ABCVisualisation.libvisu import Hive, thermal_shifts
+from RHCVisualisation.libvisu import Hive, thermal_shifts
 import cv2, os
 import pandas as pd
 import numpy as np
