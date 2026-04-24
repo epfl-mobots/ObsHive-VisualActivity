@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import seaborn as sns
 from scipy.stats import ttest_rel
+from abc import ABC, abstractmethod
 
 
 def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False):
@@ -30,16 +31,81 @@ def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False):
         activity = cv2.countNonZero(activity_mask)/ activity_mask.size
     return activity
 
-
-class HtrsActivity:
+class Activity(ABC):
     '''
-    Class representing the visual activity metrics for a hive at a specific timestamp.
+    Abstract Base Class representing the visual activity metrics for a hive at a specific timestamp.
+    '''
+    
+    def __init__(self, ts:pd.Timestamp):
+        self.ts = ts
+
+    @abstractmethod
+    def _aggregateActivity(self):
+        pass
+
+class RpisActivity(Activity):
+    '''
+    Activity class representing the visual activity metrics for the four RPis.
+    Contains activity values for each RPi, as well as aggregated activity per ihl and for the whole hive.
+    Attributes:
+        ts (pd.Timestamp): Timestamp of the activity measurement.
+        activity_values (list[float]): List of 4 activity values for each RPi.
+        ihl_activity (dict): Aggregated activity per ihl for 'upper' and 'lower'.
+        hive_activity (float): Aggregated activity for the whole hive.
+    '''
+
+    def __init__(self, ts:pd.Timestamp, activity_values:list[float]):
+        '''
+        Creates an RpisActivity object.
+
+        Nones in activity_values will spread to yield np.NaN in ihl_activity and hive_activity.
+        '''
+        assert len(activity_values) == 4, "activity_values must be a list of 4 floats (one per RPi), or None if no data for that RPi"
+        super().__init__(ts)
+        self.activity_values = activity_values  # List with 4 activity values for each RPi
+        self.ihl_activity = self._aggregateActivity()
+        self.hive_activity = self._aggregateHiveActivity()
+
+    def _aggregateActivity(self)->dict:
+        '''
+        Aggregate the activity values across both RPis for each ihl.
+        
+        :return: dict with heater names as keys and aggregated activity as values
+        '''
+        aggregated_activity = {"upper": 0, "lower":0.0}
+        for ihl in aggregated_activity.keys():
+            rpis = [0,2] if ihl == "upper" else [1,3]
+            acts_values = [self.activity_values[rpi] for rpi in rpis]
+            if any(act is None for act in acts_values):
+                aggregated_activity[ihl] = None
+            else:
+                aggregated_activity[ihl] = np.sum(acts_values)
+
+        return aggregated_activity
+    
+    def _aggregateHiveActivity(self)->float:
+        '''
+        Aggregate the activity values across both IHLs for the whole hive.
+        
+        :return: float representing the aggregated activity for the whole hive
+        '''
+        if any(act is None for act in self.activity_values):
+            return None
+        else:
+            return np.sum(self.activity_values)
+
+class HtrsActivity(Activity):
+    '''
+    Activity class representing the visual activity metrics for all the heaters of the hive.
     Contains activity values for all heaters across the four RPis, as well as aggregated activity per ihl.
     Attributes:
         ts (pd.Timestamp): Timestamp of the activity measurement.
         activity_values (list[dict]): List of 4 dicts, each containing heater activity values for one RPi.
         htr_activity (dict): Aggregated activity per heater for 'upper' and 'lower' ihls.
     '''
+    
+    HEATER_IDS = [f'h{i:02d}' for i in range(10)]
+
     def __init__(self, ts:pd.Timestamp, activity_values:list[dict]):
         '''
         Creates an HtrsActivity object.
@@ -47,15 +113,14 @@ class HtrsActivity:
         Nones in activity_values will spread to yield np.NaN in all heaters in self.htr_activity.
         '''
         assert len(activity_values) == 4, "activity_values must be a list of 4 dicts (one per RPi), or None if no data for that RPi"
-        self.ts = ts
+        super().__init__(ts)
         self.activity_values = activity_values  # List with 4 dicts that each have heaters as keys and activity as values
-        all_htrs = [f"h{i:02}" for i in range(10)]
         # Fill missing heaters with None activity
         for i, rpi_dict in enumerate(self.activity_values):
             if rpi_dict is None:
-                self.activity_values[i] = {htr: None for htr in all_htrs}
+                self.activity_values[i] = {htr: None for htr in HtrsActivity.HEATER_IDS}
             else:
-                for htr in all_htrs:
+                for htr in HtrsActivity.HEATER_IDS:
                     if htr not in rpi_dict.keys():
                         self.activity_values[i][htr] = None
 
@@ -63,15 +128,14 @@ class HtrsActivity:
 
     def _aggregateActivity(self)->dict:
         '''
-        Aggregate the activity values across two RPis for each heater of each ihl.
+        Aggregate the activity values across both RPis for each heater of each ihl.
         
-        :return: dict with heater names as keys and aggregated activity as values
+        :return: a dict for each IHL with heater names as keys and aggregated activity as values
         '''
         aggregated_activity = {"upper": {}, "lower":{}}
         for ihl in aggregated_activity.keys():
             # Fill all htrs with 0 to start
-            all_htrs = [f"h{i:02}" for i in range(10)]
-            for htr in all_htrs:
+            for htr in HtrsActivity.HEATER_IDS:
                 aggregated_activity[ihl][htr] = 0.0
             
             rpis = [0,2] if ihl == "upper" else [1,3]
@@ -90,7 +154,18 @@ class HtrsActivity:
 
         return aggregated_activity
 
-def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity: # TODO: test this function
+def computeRpiActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False)->RpisActivity:
+    '''
+    Computes the visual activity (RpisActivity) between two Hive objects for a given threshold.
+
+    :param hive1: Hive object at time t1
+    :param hive2: Hive object at time t2, which will fix the ts of the activity
+    :param threshold: int, pixel difference threshold to consider as activity
+    :return activity: RpisActivity object containing the activity values
+    '''
+
+
+def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity:
     '''
     Computes the visual activity between two Hive objects for the specified ihl and heater.
 
@@ -101,9 +176,9 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     :param htr: str, heater number (e.g., "h00", "h01", ..., "h09")
     :return activity: HtrsActivity object containing the activity values
     '''
-    assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
+    assert len(hive1.pp_imgs) == len(hive2.pp_imgs) == 4, "Both Hive objects must contain images from 4 RPis"
     assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
-    assert htr in [f"h{i:02}" for i in range(10)], "htr must be one of 'h00' to 'h09'"
+    assert htr in HtrsActivity.HEATER_IDS, "htr must be one of 'h00' to 'h09'"
     assert ihl in ['upper', 'lower'], "ihl must be either 'upper' or 'lower'"
 
     activity_values = []
@@ -114,7 +189,7 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
             # This RPi is not considered for this ihl
             activity_values.append(None)
             continue
-        if hive1.imgs[rpi_idx] is None or hive2.imgs[rpi_idx] is None:
+        if hive1.pp_imgs[rpi_idx] is None or hive2.pp_imgs[rpi_idx] is None:
             # Cannot compute activity for any heater
             activity_values.append(None)
             continue
@@ -123,8 +198,8 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
         pos2 = hive2.htr_pos[rpi_idx][htr]
 
         # Extract the image slices for the heater positions
-        img_slice1 = hive1.imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
-        img_slice2 = hive2.imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
+        img_slice1 = hive1.pp_imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
+        img_slice2 = hive2.pp_imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
 
         # Compute activity for the specified heater
         htr_activity = activity(img_slice1, img_slice2, threshold, verbose)
@@ -134,43 +209,39 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
 
-def computeHtrsActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False)->HtrsActivity: # TODO: test this function
+@delayed
+def computeRpiActivities(img_paths:pd.DataFrame)->list[RpisActivity]:
     '''
-    Computes the visual activity between two Hive objects for all four RPis images and all heaters within each RPi.
-
-    :param hive1: Hive object at time t1
-    :param hive2: Hive object at time t2, which will fix the ts of the activity
-    :param threshold: int, pixel difference threshold to consider as activity
-    :return activity: HtrsActivity object containing the activity values
+    Computes the RpisActivity for each timestamp in img_paths.
     '''
-    assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
-    assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
+    assert len(img_paths.columns) == 4, "img_paths must have 4 columns corresponding to the 4 RPis"
+    hive_nb = img_paths.columns[0][1]  # Extract hive number from column name (assuming format "h{hive_nb}r{rpi_nb}")
+    assert all(col.startswith(f"h{hive_nb}r") for col in img_paths.columns), "All columns in img_paths must correspond to the same hive number and be in the format 'h{hive_nb}r{rpi_nb}'"
 
-    activity_values = []
-    for rpi_idx in range(4):
-        if hive1.imgs[rpi_idx] is None or hive2.imgs[rpi_idx] is None:
-            # Cannot compute activity for any heater
-            activity_values.append(None)
-            continue
-        rpi_htr_pos1 = hive1.htr_pos[rpi_idx]
-        rpi_htr_pos2 = hive2.htr_pos[rpi_idx]
-        rpi_activity = {}
-        for htr in rpi_htr_pos1.keys():
-            pos1 = rpi_htr_pos1[htr]
-            pos2 = rpi_htr_pos2[htr]
+    activities = []
+    for dt, img_path in img_paths.iterrows():
+        ts_images = []
+        ts_imgs_names = []
+        for col in img_path.index:
+            if img_path[col] is None:
+                ts_images.append(None)
+            else:
+                img = cv2.imread(img_path[col], cv2.IMREAD_GRAYSCALE)
+                ts_images.append(img)
+            ts_imgs_names.append(img_path[col].split(os.sep)[-1][:-4])
 
-            # Extract the image slices for the heater positions
-            img_slice1 = hive1.imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
-            img_slice2 = hive2.imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
+        _hive = Hive(dt, ts_images, False, ts_imgs_names, hive_nb=hive_nb)
+        if len(activities) > 0:
+            # Compute the acti
+            rpi_activity = RpisActivity(dt, )
+            activities.append(rpi_activity)
+        else:
+            # For the first timestamp, we cannot compute activity since we don't have a previous image. We will set activity to None.
+            rpi_activity = RpisActivity(ts=dt, activity_values=[None, None, None, None])
+            activities.append(rpi_activity)
 
-            # Compute activity for this heater
-            htr_activity = activity(img_slice1, img_slice2, threshold, verbose)
-            rpi_activity[htr] = htr_activity
-
-        activity_values.append(rpi_activity)
-
-    _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
-    return _activity
+        del _hive  # Free memory
+        del ts_images  # Free memory
 
 @delayed
 def computeSignatureActivity(sig:Signature, img_paths:pd.DataFrame, duration:int)->tuple[list[HtrsActivity], list[HtrsActivity]]:
