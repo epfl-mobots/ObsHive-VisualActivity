@@ -1,0 +1,3 @@
+[submodule "RHCVisualisation"]
+	path = RHCVisualisation
+	url = https://github.com/epfl-mobots/RHCVisualisation.git
