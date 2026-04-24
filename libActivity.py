@@ -5,12 +5,11 @@ Author: Cyril Monette
 Initial date: 14/11/2025
 '''
 
-from RHCVisualisation.libvisu import Hive, thermal_shifts
+from RHCVisualisation.libvisu import Hive
 import cv2, os
 import pandas as pd
 import numpy as np
 from dask import delayed
-from libaSensing import Signature, getDTExp
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import seaborn as sns
@@ -101,7 +100,10 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     :param htr: str, heater number (e.g., "h00", "h01", ..., "h09")
     :return activity: HtrsActivity object containing the activity values
     '''
-    assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
+
+    hive1.computePPImgs() # Ensure the preprocessed images are computed for hive1
+    hive2.computePPImgs() # Ensure the preprocessed images are computed for hive2
+    assert len(hive1.pp_imgs) == len(hive2.pp_imgs) == 4, "Both Hive objects must contain images from 4 RPis"
     assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
     assert htr in [f"h{i:02}" for i in range(10)], "htr must be one of 'h00' to 'h09'"
     assert ihl in ['upper', 'lower'], "ihl must be either 'upper' or 'lower'"
@@ -114,7 +116,7 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
             # This RPi is not considered for this ihl
             activity_values.append(None)
             continue
-        if hive1.imgs[rpi_idx] is None or hive2.imgs[rpi_idx] is None:
+        if hive1.pp_imgs[rpi_idx] is None or hive2.pp_imgs[rpi_idx] is None:
             # Cannot compute activity for any heater
             activity_values.append(None)
             continue
@@ -123,8 +125,8 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
         pos2 = hive2.htr_pos[rpi_idx][htr]
 
         # Extract the image slices for the heater positions
-        img_slice1 = hive1.imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
-        img_slice2 = hive2.imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
+        img_slice1 = hive1.pp_imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
+        img_slice2 = hive2.pp_imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
 
         # Compute activity for the specified heater
         htr_activity = activity(img_slice1, img_slice2, threshold, verbose)
@@ -143,12 +145,15 @@ def computeHtrsActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=Fals
     :param threshold: int, pixel difference threshold to consider as activity
     :return activity: HtrsActivity object containing the activity values
     '''
-    assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
+
+    hive1.computePPImgs() # Ensure the preprocessed images are computed for hive1
+    hive2.computePPImgs() # Ensure the preprocessed images are computed for hive2
+    assert len(hive1.pp_imgs) == len(hive2.pp_imgs) == 4, "Both Hive objects must contain images from 4 RPis"
     assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
 
     activity_values = []
     for rpi_idx in range(4):
-        if hive1.imgs[rpi_idx] is None or hive2.imgs[rpi_idx] is None:
+        if hive1.pp_imgs[rpi_idx] is None or hive2.pp_imgs[rpi_idx] is None:
             # Cannot compute activity for any heater
             activity_values.append(None)
             continue
@@ -160,8 +165,8 @@ def computeHtrsActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=Fals
             pos2 = rpi_htr_pos2[htr]
 
             # Extract the image slices for the heater positions
-            img_slice1 = hive1.imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
-            img_slice2 = hive2.imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
+            img_slice1 = hive1.pp_imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
+            img_slice2 = hive2.pp_imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
 
             # Compute activity for this heater
             htr_activity = activity(img_slice1, img_slice2, threshold, verbose)
@@ -171,56 +176,6 @@ def computeHtrsActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=Fals
 
     _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
-
-@delayed
-def computeSignatureActivity(sig:Signature, img_paths:pd.DataFrame, duration:int)->tuple[list[HtrsActivity], list[HtrsActivity]]:
-    '''
-    Computes the visual activity for a given signature before and after the signature.
-    Warning: This function assumes that image frequency is 1 minute.
-
-    :param sig: Signature object containing the start timestamp
-    :param img_paths: DataFrame with image paths indexed by timestamp
-    :param duration: int, duration in minutes to consider before and after the signature
-    :return: tuple of lists containing (befores_sig_activities, afters_sig_activities)
-    '''
-    assert duration%2 == 0, "Duration must be an even number."
-
-    befores_sig_activities = []
-    afters_sig_activities = []
-
-    exp = getDTExp(sig.ts_start, sig.exp.heater.hive_num)
-    all_ts = pd.date_range(start=sig.ts_start_pwm - pd.Timedelta(minutes=duration), end=sig.ts_start_pwm + pd.Timedelta(minutes=duration), freq='1min')
-    # Drop seconds from ts
-    all_ts = all_ts.map(lambda ts: ts.replace(second=0, microsecond=0))
-
-    activities = []
-    prev_hive = None
-    for dt in all_ts:            
-        ts_images = []
-        ts_names = []
-        img_path = img_paths.loc[dt].copy()
-        for col in img_path.index:
-            if img_path[col] is None:
-                ts_images.append(None)
-                ts_names.append("No image available")
-            else:
-                img = cv2.imread(img_path[col], cv2.IMREAD_GRAYSCALE)
-                ts_images.append(img)
-                img_name = img_path[col].split(os.sep)[-1][:-4]
-                ts_names.append(img_name)
-
-        _hive = Hive(dt, ts_images, False, ts_names, hive_nb=sig.exp.heater.hive_num)
-        _hive.setThermalShifts(thermal_shifts[exp][sig.exp.heater.hive_num])
-        if prev_hive is not None:
-            activity_metrics = computeActivitySingleHtr(prev_hive, _hive, threshold=25, ihl = sig.exp.heater.ihl, htr=sig.exp.heater.heater_num, verbose=False)
-            activities.append(activity_metrics)
-        prev_hive = _hive
-        del _hive  # Free memory
-        del ts_images  # Free memory
-
-    befores_sig_activities = [_act for _act in activities if _act.ts <= sig.ts_start_pwm]
-    afters_sig_activities = [_act for _act in activities if _act.ts > sig.ts_start_pwm]
-    return befores_sig_activities, afters_sig_activities
 
 def plotActivities(activities:pd.DataFrame, deltaT:float, ihl:str, alternative_ttest = "two-sided", common_y_axis:bool = False, verbose:bool=False):
     '''
