@@ -101,7 +101,10 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     :param htr: str, heater number (e.g., "h00", "h01", ..., "h09")
     :return activity: HtrsActivity object containing the activity values
     '''
-    assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
+
+    hive1.computePPImgs() # Ensure the preprocessed images are computed for hive1
+    hive2.computePPImgs() # Ensure the preprocessed images are computed for hive2
+    assert len(hive1.pp_imgs) == len(hive2.pp_imgs) == 4, "Both Hive objects must contain images from 4 RPis"
     assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
     assert htr in [f"h{i:02}" for i in range(10)], "htr must be one of 'h00' to 'h09'"
     assert ihl in ['upper', 'lower'], "ihl must be either 'upper' or 'lower'"
@@ -114,7 +117,7 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
             # This RPi is not considered for this ihl
             activity_values.append(None)
             continue
-        if hive1.imgs[rpi_idx] is None or hive2.imgs[rpi_idx] is None:
+        if hive1.pp_imgs[rpi_idx] is None or hive2.pp_imgs[rpi_idx] is None:
             # Cannot compute activity for any heater
             activity_values.append(None)
             continue
@@ -123,8 +126,8 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
         pos2 = hive2.htr_pos[rpi_idx][htr]
 
         # Extract the image slices for the heater positions
-        img_slice1 = hive1.imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
-        img_slice2 = hive2.imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
+        img_slice1 = hive1.pp_imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
+        img_slice2 = hive2.pp_imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
 
         # Compute activity for the specified heater
         htr_activity = activity(img_slice1, img_slice2, threshold, verbose)
@@ -143,12 +146,15 @@ def computeHtrsActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=Fals
     :param threshold: int, pixel difference threshold to consider as activity
     :return activity: HtrsActivity object containing the activity values
     '''
-    assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
+
+    hive1.computePPImgs() # Ensure the preprocessed images are computed for hive1
+    hive2.computePPImgs() # Ensure the preprocessed images are computed for hive2
+    assert len(hive1.pp_imgs) == len(hive2.pp_imgs) == 4, "Both Hive objects must contain images from 4 RPis"
     assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
 
     activity_values = []
     for rpi_idx in range(4):
-        if hive1.imgs[rpi_idx] is None or hive2.imgs[rpi_idx] is None:
+        if hive1.pp_imgs[rpi_idx] is None or hive2.pp_imgs[rpi_idx] is None:
             # Cannot compute activity for any heater
             activity_values.append(None)
             continue
@@ -160,8 +166,8 @@ def computeHtrsActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=Fals
             pos2 = rpi_htr_pos2[htr]
 
             # Extract the image slices for the heater positions
-            img_slice1 = hive1.imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
-            img_slice2 = hive2.imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
+            img_slice1 = hive1.pp_imgs[rpi_idx][pos1[0][1]:pos1[1][1], pos1[0][0]:pos1[1][0]]
+            img_slice2 = hive2.pp_imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
 
             # Compute activity for this heater
             htr_activity = activity(img_slice1, img_slice2, threshold, verbose)
