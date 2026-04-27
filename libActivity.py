@@ -9,7 +9,7 @@ from RHCVisualisation.libvisu import Hive
 import cv2, os
 import pandas as pd
 import numpy as np
-from dask import delayed
+from dask import delayed, compute
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import seaborn as sns
@@ -153,6 +153,7 @@ class HtrsActivity(Activity):
 
         return aggregated_activity
 
+@delayed
 def computeRpiActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False)->RpisActivity:
     '''
     Computes the visual activity (RpisActivity) between two Hive objects for a given threshold.
@@ -163,6 +164,24 @@ def computeRpiActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False
     :return activity: RpisActivity object containing the activity values
     '''
 
+    assert hive1.hive_nb == hive2.hive_nb, "Both Hive objects must correspond to the same hive number"
+    hive1.computePPImgs() # Ensure the preprocessed images are computed for hive1
+    hive2.computePPImgs() # Ensure the preprocessed images are computed for hive2
+    assert len(hive1.pp_imgs) == len(hive2.pp_imgs) == 4, "Both Hive objects must contain images from 4 RPis"
+
+    unique_imgs_1 = hive1.getUniqueRPiImages()
+    unique_imgs_2 = hive2.getUniqueRPiImages()
+
+    activity_values = []
+    for unique_img1, unique_img2 in zip(unique_imgs_1, unique_imgs_2):
+        if unique_img1 is None or unique_img2 is None:
+            activity_values.append(None)
+        else:
+            act = activity(unique_img1, unique_img2, threshold, verbose)
+            activity_values.append(act)
+
+    _activity = RpisActivity(hive2.ts, activity_values)
+    return _activity
 
 def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity:
     '''
@@ -211,7 +230,6 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
 
-@delayed
 def computeRpiActivities(img_paths:pd.DataFrame)->list[RpisActivity]:
     '''
     Computes the RpisActivity for each timestamp in img_paths.
@@ -220,7 +238,8 @@ def computeRpiActivities(img_paths:pd.DataFrame)->list[RpisActivity]:
     hive_nb = img_paths.columns[0][1]  # Extract hive number from column name (assuming format "h{hive_nb}r{rpi_nb}")
     assert all(col.startswith(f"h{hive_nb}r") for col in img_paths.columns), "All columns in img_paths must correspond to the same hive number and be in the format 'h{hive_nb}r{rpi_nb}'"
 
-    activities = []
+    activities_delayed = []
+    prev_hive = None
     for dt, img_path in img_paths.iterrows():
         ts_images = []
         ts_imgs_names = []
@@ -233,17 +252,20 @@ def computeRpiActivities(img_paths:pd.DataFrame)->list[RpisActivity]:
             ts_imgs_names.append(img_path[col].split(os.sep)[-1][:-4])
 
         _hive = Hive(dt, ts_images, False, ts_imgs_names, hive_nb=hive_nb)
-        if len(activities) > 0:
-            # Compute the acti
-            rpi_activity = RpisActivity(dt, )
-            activities.append(rpi_activity)
+        if prev_hive is not None:
+            # Compute the activity between the current hive and the previous one, and append it to the activities list
+            rpi_activity = computeRpiActivity(prev_hive, _hive, threshold=25, verbose=False)
+            activities_delayed.append(rpi_activity)
         else:
             # For the first timestamp, we cannot compute activity since we don't have a previous image. We will set activity to None.
             rpi_activity = RpisActivity(ts=dt, activity_values=[None, None, None, None])
-            activities.append(rpi_activity)
+            activities_delayed.append(rpi_activity)
+        prev_hive = _hive
 
-        del _hive  # Free memory
-        del ts_images  # Free memory
+    # Compute the activites with dask
+    activities = compute(*activities_delayed)
+
+    return activities
 
 def plotActivities(activities:pd.DataFrame, deltaT:float, ihl:str, alternative_ttest = "two-sided", common_y_axis:bool = False, verbose:bool=False):
     '''
