@@ -28,7 +28,7 @@ def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False):
         activity_mask = 0
     else:
         activity = cv2.countNonZero(activity_mask)/ activity_mask.size
-    return activity
+    return activity, activity_mask
 
 class Activity(ABC):
     '''
@@ -173,15 +173,18 @@ def computeRpiActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False
     unique_imgs_2 = hive2.getUniqueRPiImages()
 
     activity_values = []
+    activity_masks = []
     for unique_img1, unique_img2 in zip(unique_imgs_1, unique_imgs_2):
         if unique_img1 is None or unique_img2 is None:
             activity_values.append(None)
         else:
-            act = activity(unique_img1, unique_img2, threshold, verbose)
+            act, act_mask = activity(unique_img1, unique_img2, threshold, verbose)
             activity_values.append(act)
+            activity_masks.append(act_mask)
 
     _activity = RpisActivity(hive2.ts, activity_values)
-    return _activity
+    hive_diff = Hive(hive2.ts, activity_masks, True, hive2.imgs_names, hive_nb=hive2.hive_nb)
+    return _activity, hive_diff
 
 def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity:
     '''
@@ -230,15 +233,20 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
 
-def computeRpiActivities(img_paths:pd.DataFrame)->list[RpisActivity]:
+def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, verbose:bool=False)->tuple[list[RpisActivity], list[Hive]]:
     '''
     Computes the RpisActivity for each timestamp in img_paths.
+
+    :param img_paths: DataFrame with timestamps as index and 4 columns corresponding to the 4 RPis, containing the image paths.
+    :param threshold: int, pixel difference threshold to consider as activity
+    :param verbose: bool, whether to print verbose output
+    :return: a tuple containing a list of RpisActivity objects and a list of Hive objects representing the differences between consecutive timestamps
     '''
     assert len(img_paths.columns) == 4, "img_paths must have 4 columns corresponding to the 4 RPis"
     hive_nb = img_paths.columns[0][1]  # Extract hive number from column name (assuming format "h{hive_nb}r{rpi_nb}")
     assert all(col.startswith(f"h{hive_nb}r") for col in img_paths.columns), "All columns in img_paths must correspond to the same hive number and be in the format 'h{hive_nb}r{rpi_nb}'"
 
-    activities_delayed = []
+    tasks = []
     prev_hive = None
     for dt, img_path in img_paths.iterrows():
         ts_images = []
@@ -254,18 +262,27 @@ def computeRpiActivities(img_paths:pd.DataFrame)->list[RpisActivity]:
         _hive = Hive(dt, ts_images, False, ts_imgs_names, hive_nb=hive_nb)
         if prev_hive is not None:
             # Compute the activity between the current hive and the previous one, and append it to the activities list
-            rpi_activity = computeRpiActivity(prev_hive, _hive, threshold=25, verbose=False)
-            activities_delayed.append(rpi_activity)
+            task = computeRpiActivity(prev_hive, _hive, threshold=threshold, verbose=verbose)
+            tasks.append(task)
         else:
-            # For the first timestamp, we cannot compute activity since we don't have a previous image. We will set activity to None.
-            rpi_activity = RpisActivity(ts=dt, activity_values=[None, None, None, None])
-            activities_delayed.append(rpi_activity)
+            # For the first timestamp, we cannot compute activity since we don't have a previous image.
+            tasks.append(None)
         prev_hive = _hive
 
     # Compute the activites with dask
-    activities = compute(*activities_delayed)
+    output = compute(*tasks)
+    activities = []
+    diff_hives = []
+    for result in output:
+        if result is not None:
+            activity, hive_diff = result
+            activities.append(activity)
+            diff_hives.append(hive_diff)
+        else:
+            activities.append(None)
+            diff_hives.append(None)
 
-    return activities
+    return activities, diff_hives
 
 def plotActivities(activities:pd.DataFrame, deltaT:float, ihl:str, alternative_ttest = "two-sided", common_y_axis:bool = False, verbose:bool=False):
     '''
