@@ -6,6 +6,7 @@ Initial date: 14/11/2025
 '''
 
 from RHCVisualisation.libvisu import Hive
+from RHCVisualisation.RHCImaging.libimage import RPiCamV3_img_shape
 import cv2, os
 import pandas as pd
 import numpy as np
@@ -164,13 +165,22 @@ def computeRpiActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False
     :return activity: RpisActivity object containing the activity values
     '''
 
-    assert hive1.hive_nb == hive2.hive_nb, "Both Hive objects must correspond to the same hive number"
-    hive1.computePPImgs() # Ensure the preprocessed images are computed for hive1
-    hive2.computePPImgs() # Ensure the preprocessed images are computed for hive2
-    assert len(hive1.pp_imgs) == len(hive2.pp_imgs) == 4, "Both Hive objects must contain images from 4 RPis"
+    assert hive1.hive_nb == hive2.hive_nb, f"Both Hive objects must correspond to the same hive number. Received hive1.hive_nb={hive1.hive_nb} and hive2.hive_nb={hive2.hive_nb}"
+    assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
 
     unique_imgs_1 = hive1.getUniqueRPiImages()
     unique_imgs_2 = hive2.getUniqueRPiImages()
+    if verbose:
+        print(f"Unique images for hive1 at {hive1.ts}: {[img.shape for img in unique_imgs_1]}")
+        # Check if they are the same
+        for i in range(4):
+            # Check the shape first
+            if unique_imgs_1[i].shape != hive1.imgs[i].shape:
+                print(f"RPi {i} - unique image and pp image have different shapes: {unique_imgs_1[i].shape} vs {hive1.imgs[i].shape}")
+            elif unique_imgs_1[i] is not None and hive1.imgs[i] is not None:
+                print(f"RPi {i} - unique image and pp image are the same: {(unique_imgs_1[i] == hive1.imgs[i]).all()}")
+            else:
+                print(f"RPi {i} - unique image or pp image is None")
 
     activity_values = []
     activity_masks = []
@@ -183,7 +193,18 @@ def computeRpiActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False
             activity_masks.append(act_mask)
 
     _activity = RpisActivity(hive2.ts, activity_values)
-    hive_diff = Hive(hive2.ts, activity_masks, True, hive2.imgs_names, hive_nb=hive2.hive_nb)
+
+    extended_activity_masks = []
+    for i, act_mask in enumerate(activity_masks):
+        if i in [0,2]:  # rpis 0 and 2 need padding on the bottom
+            pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
+            extended_mask = np.pad(act_mask, ((0, pad_height), (0, 0)), mode='constant', constant_values=0)
+        else:  # rpis 1 and 3 need padding on the top
+            pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
+            extended_mask = np.pad(act_mask, ((pad_height, 0), (0, 0)), mode='constant', constant_values=0)
+        extended_activity_masks.append(extended_mask)
+    hive_diff = Hive(hive2.ts, extended_activity_masks, True, hive2.imgs_names, hive_nb=hive2.hive_nb)
+    
     return _activity, hive_diff
 
 def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity:
@@ -243,7 +264,7 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, verbose:bool=
     :return: a tuple containing a list of RpisActivity objects and a list of Hive objects representing the differences between consecutive timestamps
     '''
     assert len(img_paths.columns) == 4, "img_paths must have 4 columns corresponding to the 4 RPis"
-    hive_nb = img_paths.columns[0][1]  # Extract hive number from column name (assuming format "h{hive_nb}r{rpi_nb}")
+    hive_nb = int(img_paths.columns[0][1])  # Extract hive number from column name (assuming format "h{hive_nb}r{rpi_nb}")
     assert all(col.startswith(f"h{hive_nb}r") for col in img_paths.columns), "All columns in img_paths must correspond to the same hive number and be in the format 'h{hive_nb}r{rpi_nb}'"
 
     tasks = []
