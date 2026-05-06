@@ -155,13 +155,13 @@ class HtrsActivity(Activity):
         return aggregated_activity
 
 @delayed
-def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, verbose:bool=False)->RpisActivity:
+def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, verbose:bool=False)->tuple[RpisActivity, Hive]:
     '''
     Computes the visual activity (RpisActivity) between TWO timestamps for a given hive and threshold.
 
     :param img_paths: DataFrame with timestamps as index, 4 columns corresponding to the 4 RPis and two rows corresponding to both timestamps.
     :param threshold: int, pixel difference threshold to consider as activity
-    :return activity: RpisActivity object containing the activity values
+    :return activity: tuple of (RpisActivity object, hive_diff Hive object) representing the differences between consecutive timestamps
     '''
 
     assert len(img_paths.columns) == 4, "img_paths must have 4 columns corresponding to the 4 RPis"
