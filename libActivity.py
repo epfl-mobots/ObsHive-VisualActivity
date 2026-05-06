@@ -155,18 +155,30 @@ class HtrsActivity(Activity):
         return aggregated_activity
 
 @delayed
-def computeRpiActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=False)->RpisActivity:
+def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, verbose:bool=False)->RpisActivity:
     '''
-    Computes the visual activity (RpisActivity) between two Hive objects for a given threshold.
+    Computes the visual activity (RpisActivity) between TWO timestamps for a given hive and threshold.
 
-    :param hive1: Hive object at time t1
-    :param hive2: Hive object at time t2, which will fix the ts of the activity
+    :param img_paths: DataFrame with timestamps as index, 4 columns corresponding to the 4 RPis and two rows corresponding to both timestamps.
     :param threshold: int, pixel difference threshold to consider as activity
     :return activity: RpisActivity object containing the activity values
     '''
 
-    assert hive1.hive_nb == hive2.hive_nb, f"Both Hive objects must correspond to the same hive number. Received hive1.hive_nb={hive1.hive_nb} and hive2.hive_nb={hive2.hive_nb}"
-    assert len(hive1.imgs) == len(hive2.imgs) == 4, "Both Hive objects must contain images from 4 RPis"
+    assert len(img_paths.columns) == 4, "img_paths must have 4 columns corresponding to the 4 RPis"
+    assert len(img_paths) == 2, "img_paths must have 2 rows corresponding to the two timestamps to compare"
+    assert type(img_paths.index[0]) == pd.Timestamp and type(img_paths.index[1]) == pd.Timestamp, "The index of img_paths must be of type pd.Timestamp"
+    assert img_paths.index[0] < img_paths.index[1], "The first row of img_paths should correspond to the earlier timestamp (t1) and the second row to the later timestamp (t2)"
+    hive_nb = int(img_paths.columns[0][1])  # Extract hive number from column name (assuming format "h{hive_nb}r{rpi_nb}")
+    assert all(col.startswith(f"h{hive_nb}r") for col in img_paths.columns), "All columns in img_paths must correspond to the same hive number and be in the format 'h{hive_nb}r{rpi_nb}'"
+
+    imgs1 = [cv2.imread(p, cv2.IMREAD_GRAYSCALE) if p is not None else None for p in img_paths.iloc[0]]
+    imgs2 = [cv2.imread(p, cv2.IMREAD_GRAYSCALE) if p is not None else None for p in img_paths.iloc[1]]
+
+    img_names1 = [img_paths.iloc[0][col].split(os.sep)[-1][:-4] if img_paths.iloc[0][col] is not None else None for col in img_paths.columns]
+    img_names2 = [img_paths.iloc[1][col].split(os.sep)[-1][:-4] if img_paths.iloc[1][col] is not None else None for col in img_paths.columns]
+
+    hive1 = Hive(img_paths.index[0], imgs1, False, img_names1, hive_nb=hive_nb)
+    hive2 = Hive(img_paths.index[1], imgs2, False, img_names2, hive_nb=hive_nb)
 
     unique_imgs_1 = hive1.getUniqueRPiImages()
     unique_imgs_2 = hive2.getUniqueRPiImages()
@@ -268,27 +280,11 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, verbose:bool=
     assert all(col.startswith(f"h{hive_nb}r") for col in img_paths.columns), "All columns in img_paths must correspond to the same hive number and be in the format 'h{hive_nb}r{rpi_nb}'"
 
     tasks = []
-    prev_hive = None
-    for dt, img_path in img_paths.iterrows():
-        ts_images = []
-        ts_imgs_names = []
-        for col in img_path.index:
-            if img_path[col] is None:
-                ts_images.append(None)
-            else:
-                img = cv2.imread(img_path[col], cv2.IMREAD_GRAYSCALE)
-                ts_images.append(img)
-            ts_imgs_names.append(img_path[col].split(os.sep)[-1][:-4])
-
-        _hive = Hive(dt, ts_images, False, ts_imgs_names, hive_nb=hive_nb)
-        if prev_hive is not None:
-            # Compute the activity between the current hive and the previous one, and append it to the activities list
-            task = computeRpiActivity(prev_hive, _hive, threshold=threshold, verbose=verbose)
-            tasks.append(task)
-        else:
-            # For the first timestamp, we cannot compute activity since we don't have a previous image.
-            tasks.append(None)
-        prev_hive = _hive
+    
+    for i in range(1, len(img_paths)):
+        pair_df = img_paths.iloc[i-1:i+1]  # 2 consecutive rows
+        task = computeRpiActivity(pair_df, threshold=threshold, verbose=verbose)
+        tasks.append(task)
 
     # Compute the activites with dask
     output = compute(*tasks)
