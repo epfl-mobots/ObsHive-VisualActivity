@@ -72,14 +72,14 @@ class RpisActivity(Activity):
         
         :return: dict with heater names as keys and aggregated activity as values
         '''
-        aggregated_activity = {"upper": 0, "lower":0.0}
+        aggregated_activity = {"upper": 0.0, "lower":0.0}
         for ihl in aggregated_activity.keys():
             rpis = [0,2] if ihl == "upper" else [1,3]
             acts_values = [self.activity_values[rpi] for rpi in rpis]
             if any(act is None for act in acts_values):
                 aggregated_activity[ihl] = None
             else:
-                aggregated_activity[ihl] = np.sum(acts_values)
+                aggregated_activity[ihl] = np.mean(acts_values)
 
         return aggregated_activity
     
@@ -92,7 +92,7 @@ class RpisActivity(Activity):
         if any(act is None for act in self.activity_values):
             return None
         else:
-            return np.sum(self.activity_values)
+            return np.mean(self.activity_values)
 
 class HtrsActivity(Activity):
     '''
