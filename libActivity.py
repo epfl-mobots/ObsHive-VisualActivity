@@ -5,7 +5,7 @@ Author: Cyril Monette
 Initial date: 14/11/2025
 '''
 
-from RHCVisualisation.libvisu import Hive, thermal_shifts
+from RHCVisualisation.libvisu import Hive, exp_thermal_shifts
 import cv2, os
 import pandas as pd
 import numpy as np
@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import seaborn as sns
 from scipy.stats import ttest_rel
+from abc import ABC, abstractmethod
 
 
 def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False):
@@ -28,18 +29,33 @@ def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False):
         activity_mask = 0
     else:
         activity = cv2.countNonZero(activity_mask)/ activity_mask.size
-    return activity
+    return activity, activity_mask
 
-
-class HtrsActivity:
+class Activity(ABC):
     '''
-    Class representing the visual activity metrics for a hive at a specific timestamp.
+    Abstract Base Class representing the visual activity metrics for a hive at a specific timestamp.
+    '''
+    
+    def __init__(self, ts:pd.Timestamp):
+        self.ts = ts
+
+    @abstractmethod
+    def _aggregateActivity(self):
+        pass
+
+
+class HtrsActivity(Activity):
+    '''
+    Activity class representing the visual activity metrics for all the heaters of the hive.
     Contains activity values for all heaters across the four RPis, as well as aggregated activity per ihl.
     Attributes:
         ts (pd.Timestamp): Timestamp of the activity measurement.
         activity_values (list[dict]): List of 4 dicts, each containing heater activity values for one RPi.
         htr_activity (dict): Aggregated activity per heater for 'upper' and 'lower' ihls.
     '''
+    
+    HEATER_IDS = [f'h{i:02d}' for i in range(10)]
+
     def __init__(self, ts:pd.Timestamp, activity_values:list[dict]):
         '''
         Creates an HtrsActivity object.
@@ -47,15 +63,14 @@ class HtrsActivity:
         Nones in activity_values will spread to yield np.NaN in all heaters in self.htr_activity.
         '''
         assert len(activity_values) == 4, "activity_values must be a list of 4 dicts (one per RPi), or None if no data for that RPi"
-        self.ts = ts
+        super().__init__(ts)
         self.activity_values = activity_values  # List with 4 dicts that each have heaters as keys and activity as values
-        all_htrs = [f"h{i:02}" for i in range(10)]
         # Fill missing heaters with None activity
         for i, rpi_dict in enumerate(self.activity_values):
             if rpi_dict is None:
-                self.activity_values[i] = {htr: None for htr in all_htrs}
+                self.activity_values[i] = {htr: None for htr in HtrsActivity.HEATER_IDS}
             else:
-                for htr in all_htrs:
+                for htr in HtrsActivity.HEATER_IDS:
                     if htr not in rpi_dict.keys():
                         self.activity_values[i][htr] = None
 
@@ -63,15 +78,14 @@ class HtrsActivity:
 
     def _aggregateActivity(self)->dict:
         '''
-        Aggregate the activity values across two RPis for each heater of each ihl.
+        Aggregate the activity values across both RPis for each heater of each ihl.
         
-        :return: dict with heater names as keys and aggregated activity as values
+        :return: a dict for each IHL with heater names as keys and aggregated activity as values
         '''
         aggregated_activity = {"upper": {}, "lower":{}}
         for ihl in aggregated_activity.keys():
             # Fill all htrs with 0 to start
-            all_htrs = [f"h{i:02}" for i in range(10)]
-            for htr in all_htrs:
+            for htr in HtrsActivity.HEATER_IDS:
                 aggregated_activity[ihl][htr] = 0.0
             
             rpis = [0,2] if ihl == "upper" else [1,3]
@@ -106,7 +120,7 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     hive2.computePPImgs() # Ensure the preprocessed images are computed for hive2
     assert len(hive1.pp_imgs) == len(hive2.pp_imgs) == 4, "Both Hive objects must contain images from 4 RPis"
     assert hasattr(hive1, 'htr_pos') and hasattr(hive2, 'htr_pos'), "Both Hive objects must have heater positions defined"
-    assert htr in [f"h{i:02}" for i in range(10)], "htr must be one of 'h00' to 'h09'"
+    assert htr in HtrsActivity.HEATER_IDS, "htr must be one of 'h00' to 'h09'"
     assert ihl in ['upper', 'lower'], "ihl must be either 'upper' or 'lower'"
 
     activity_values = []
@@ -130,7 +144,7 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
         img_slice2 = hive2.pp_imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
 
         # Compute activity for the specified heater
-        htr_activity = activity(img_slice1, img_slice2, threshold, verbose)
+        htr_activity, _ = activity(img_slice1, img_slice2, threshold, verbose)
         rpi_activity = {htr: htr_activity}
         activity_values.append(rpi_activity)
 
@@ -170,7 +184,7 @@ def computeHtrsActivity(hive1:Hive, hive2:Hive, threshold:int, verbose:bool=Fals
             img_slice2 = hive2.pp_imgs[rpi_idx][pos2[0][1]:pos2[1][1], pos2[0][0]:pos2[1][0]]
 
             # Compute activity for this heater
-            htr_activity = activity(img_slice1, img_slice2, threshold, verbose)
+            htr_activity, _ = activity(img_slice1, img_slice2, threshold, verbose)
             rpi_activity[htr] = htr_activity
 
         activity_values.append(rpi_activity)
@@ -216,7 +230,7 @@ def computeSignatureActivity(sig:Signature, img_paths:pd.DataFrame, duration:int
                 ts_names.append(img_name)
 
         _hive = Hive(dt, ts_images, False, ts_names, hive_nb=sig.exp.heater.hive_num)
-        _hive.setThermalShifts(thermal_shifts[exp][sig.exp.heater.hive_num])
+        _hive.setThermalShifts(exp_thermal_shifts[exp][sig.exp.heater.hive_num])
         if prev_hive is not None:
             activity_metrics = computeActivitySingleHtr(prev_hive, _hive, threshold=25, ihl = sig.exp.heater.ihl, htr=sig.exp.heater.heater_num, verbose=False)
             activities.append(activity_metrics)
