@@ -199,6 +199,7 @@ def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, verbose:bool=False
     for unique_img1, unique_img2 in zip(unique_imgs_1, unique_imgs_2):
         if unique_img1 is None or unique_img2 is None:
             activity_values.append(None)
+            activity_masks.append(None)
         else:
             act, act_mask = activity(unique_img1, unique_img2, threshold, verbose)
             activity_values.append(act)
@@ -208,6 +209,9 @@ def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, verbose:bool=False
 
     extended_activity_masks = []
     for i, act_mask in enumerate(activity_masks):
+        if act_mask is None:
+            extended_activity_masks.append(None)
+            continue
         if i in [0,2]:  # rpis 0 and 2 need padding on the bottom
             pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
             extended_mask = np.pad(act_mask, ((0, pad_height), (0, 0)), mode='constant', constant_values=0)
