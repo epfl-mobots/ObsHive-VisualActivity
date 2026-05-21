@@ -155,12 +155,13 @@ class HtrsActivity(Activity):
         return aggregated_activity
 
 @delayed
-def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, verbose:bool=False)->tuple[RpisActivity, Hive]:
+def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, compute_diff_hives:bool=False, verbose:bool=False)->tuple[RpisActivity, Hive]:
     '''
     Computes the visual activity (RpisActivity) between TWO timestamps for a given hive and threshold.
 
     :param img_paths: DataFrame with timestamps as index, 4 columns corresponding to the 4 RPis and two rows corresponding to both timestamps.
     :param threshold: int, pixel difference threshold to consider as activity
+    :param compute_diff_hives: bool, whether to compute and return the Hive object representing the difference between consecutive timestamps.
     :return activity: tuple of (RpisActivity object, hive_diff Hive object) representing the differences between consecutive timestamps
     '''
 
@@ -195,31 +196,38 @@ def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, verbose:bool=False
                 print(f"RPi {i} - unique image or pp image is None")
 
     activity_values = []
-    activity_masks = []
+    if compute_diff_hives:
+        activity_masks = []
+    
     for unique_img1, unique_img2 in zip(unique_imgs_1, unique_imgs_2):
         if unique_img1 is None or unique_img2 is None:
             activity_values.append(None)
-            activity_masks.append(None)
+            if compute_diff_hives:
+                activity_masks.append(None)
         else:
             act, act_mask = activity(unique_img1, unique_img2, threshold, verbose)
             activity_values.append(act)
-            activity_masks.append(act_mask)
+            if compute_diff_hives:
+                activity_masks.append(act_mask)
 
     _activity = RpisActivity(hive2.ts, activity_values)
 
-    extended_activity_masks = []
-    for i, act_mask in enumerate(activity_masks):
-        if act_mask is None:
-            extended_activity_masks.append(None)
-            continue
-        if i in [0,2]:  # rpis 0 and 2 need padding on the bottom
-            pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
-            extended_mask = np.pad(act_mask, ((0, pad_height), (0, 0)), mode='constant', constant_values=0)
-        else:  # rpis 1 and 3 need padding on the top
-            pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
-            extended_mask = np.pad(act_mask, ((pad_height, 0), (0, 0)), mode='constant', constant_values=0)
-        extended_activity_masks.append(extended_mask)
-    hive_diff = Hive(hive2.ts, extended_activity_masks, True, hive2.imgs_names, hive_nb=hive2.hive_nb)
+    if compute_diff_hives:    
+        extended_activity_masks = []
+        for i, act_mask in enumerate(activity_masks):
+            if act_mask is None:
+                extended_activity_masks.append(None)
+                continue
+            if i in [0,2]:  # rpis 0 and 2 need padding on the bottom
+                pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
+                extended_mask = np.pad(act_mask, ((0, pad_height), (0, 0)), mode='constant', constant_values=0)
+            else:  # rpis 1 and 3 need padding on the top
+                pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
+                extended_mask = np.pad(act_mask, ((pad_height, 0), (0, 0)), mode='constant', constant_values=0)
+            extended_activity_masks.append(extended_mask)
+        hive_diff = Hive(hive2.ts, extended_activity_masks, True, hive2.imgs_names, hive_nb=hive2.hive_nb)
+    else:
+        hive_diff = None
     
     return _activity, hive_diff
 
@@ -270,12 +278,13 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
 
-def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, verbose:bool=False)->tuple[list[RpisActivity], list[Hive]]:
+def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_hives:bool=False, verbose:bool=False)->tuple[list[RpisActivity], list[Hive]]:
     '''
     Computes the RpisActivity for each timestamp in img_paths.
 
     :param img_paths: DataFrame with timestamps as index and 4 columns corresponding to the 4 RPis, containing the image paths.
     :param threshold: int, pixel difference threshold to consider as activity
+    :param compute_diff_hives: bool, whether to compute and return the Hive objects representing the differences between consecutive timestamps. For large datasets, it might lead to memory issues.
     :param verbose: bool, whether to print verbose output
     :return: a tuple containing a list of RpisActivity objects and a list of Hive objects representing the differences between consecutive timestamps
     '''
@@ -284,24 +293,28 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, verbose:bool=
     assert all(col.startswith(f"h{hive_nb}r") for col in img_paths.columns), "All columns in img_paths must correspond to the same hive number and be in the format 'h{hive_nb}r{rpi_nb}'"
 
     tasks = []
-    
     for i in range(1, len(img_paths)):
         pair_df = img_paths.iloc[i-1:i+1]  # 2 consecutive rows
-        task = computeRpiActivity(pair_df, threshold=threshold, verbose=verbose)
+        task = computeRpiActivity(pair_df, threshold, verbose=verbose)
         tasks.append(task)
 
     # Compute the activites with dask
     output = compute(*tasks)
     activities = []
-    diff_hives = []
+    if compute_diff_hives:
+        diff_hives = []
+    else:
+        diff_hives = None
     for result in output:
         if result is not None:
             activity, hive_diff = result
             activities.append(activity)
-            diff_hives.append(hive_diff)
+            if compute_diff_hives:
+                diff_hives.append(hive_diff)
         else:
             activities.append(None)
-            diff_hives.append(None)
+            if compute_diff_hives:
+                diff_hives.append(None)
 
     return activities, diff_hives
 
