@@ -7,6 +7,7 @@ Initial date: 14/11/2025
 
 from RHCVisualisation.libvisu import Hive
 from RHCVisualisation.RHCImaging.libimage import RPiCamV3_img_shape
+from typing import List, Dict, Tuple
 import cv2, os
 import pandas as pd
 import numpy as np
@@ -54,7 +55,7 @@ class RpisActivity(Activity):
         hive_activity (float): Aggregated activity for the whole hive.
     '''
 
-    def __init__(self, ts:pd.Timestamp, activity_values:list[float]):
+    def __init__(self, ts:pd.Timestamp, activity_values:List[float]):
         '''
         Creates an RpisActivity object.
 
@@ -106,7 +107,7 @@ class HtrsActivity(Activity):
     
     HEATER_IDS = [f'h{i:02d}' for i in range(10)]
 
-    def __init__(self, ts:pd.Timestamp, activity_values:list[dict]):
+    def __init__(self, ts:pd.Timestamp, activity_values:List[Dict]):
         '''
         Creates an HtrsActivity object.
 
@@ -155,7 +156,7 @@ class HtrsActivity(Activity):
         return aggregated_activity
 
 @delayed
-def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, compute_diff_hives:bool=False, verbose:bool=False)->tuple[RpisActivity, Hive]:
+def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, compute_diff_hives:bool=False, verbose:bool=False)->Tuple[RpisActivity, Hive]:
     '''
     Computes the visual activity (RpisActivity) between TWO timestamps for a given hive and threshold.
 
@@ -278,9 +279,10 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
 
-def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_hives:bool=False, verbose:bool=False)->tuple[list[RpisActivity], list[Hive]]:
+def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_hives:bool=False, verbose:bool=False)->Tuple[List[RpisActivity], List[Hive]]:
     '''
-    Computes the RpisActivity for each timestamp in img_paths.
+    Computes the RpisActivity for each timestamp in img_paths, by comparing pixel values across direct successors in the img_paths DataFrame.
+    This means that if steps of 1 minute are used in img_paths, the activity will be computed between t and t+1min, for all timestamps in img_paths.
 
     :param img_paths: DataFrame with timestamps as index and 4 columns corresponding to the 4 RPis, containing the image paths.
     :param threshold: int, pixel difference threshold to consider as activity
