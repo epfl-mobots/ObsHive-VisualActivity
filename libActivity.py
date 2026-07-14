@@ -6,6 +6,7 @@ Initial date: 14/11/2025
 '''
 
 from RHCVisualisation.libvisu import Hive, exp_thermal_shifts
+from RHCVisualisation.RHCImaging.libimage import RPiCamV3_img_shape
 import cv2, os
 import pandas as pd
 import numpy as np
@@ -43,6 +44,56 @@ class Activity(ABC):
     def _aggregateActivity(self):
         pass
 
+class RpisActivity(Activity):
+    '''
+    Activity class representing the visual activity metrics for the four RPis.
+    Contains activity values for each RPi, as well as aggregated activity per ihl and for the whole hive.
+    Attributes:
+        ts (pd.Timestamp): Timestamp of the activity measurement.
+        activity_values (list[float]): List of 4 activity values for each RPi.
+        ihl_activity (dict): Aggregated activity per ihl for 'upper' and 'lower'.
+        hive_activity (float): Aggregated activity for the whole hive.
+    '''
+
+    def __init__(self, ts:pd.Timestamp, activity_values:list[float]):
+        '''
+        Creates an RpisActivity object.
+
+        Nones in activity_values will spread to yield np.NaN in ihl_activity and hive_activity.
+        '''
+        assert len(activity_values) == 4, "activity_values must be a list of 4 floats (one per RPi), or None if no data for that RPi"
+        super().__init__(ts)
+        self.activity_values = activity_values  # List with 4 activity values for each RPi
+        self.ihl_activity = self._aggregateActivity()
+        self.hive_activity = self._aggregateHiveActivity()
+
+    def _aggregateActivity(self)->dict:
+        '''
+        Aggregate the activity values across both RPis for each ihl.
+        
+        :return: dict with heater names as keys and aggregated activity as values
+        '''
+        aggregated_activity = {"upper": 0.0, "lower":0.0}
+        for ihl in aggregated_activity.keys():
+            rpis = [0,2] if ihl == "upper" else [1,3]
+            acts_values = [self.activity_values[rpi] for rpi in rpis]
+            if any(act is None for act in acts_values):
+                aggregated_activity[ihl] = None
+            else:
+                aggregated_activity[ihl] = np.mean(acts_values)
+
+        return aggregated_activity
+    
+    def _aggregateHiveActivity(self)->float:
+        '''
+        Aggregate the activity values across both IHLs for the whole hive.
+        
+        :return: float representing the aggregated activity for the whole hive
+        '''
+        if any(act is None for act in self.activity_values):
+            return None
+        else:
+            return np.mean(self.activity_values)
 
 class HtrsActivity(Activity):
     '''
@@ -103,6 +154,83 @@ class HtrsActivity(Activity):
                     aggregated_activity[ihl][htr] /= len(rpis)
 
         return aggregated_activity
+
+@delayed
+def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, compute_diff_hives:bool=False, verbose:bool=False)->tuple[RpisActivity, Hive]:
+    '''
+    Computes the visual activity (RpisActivity) between TWO timestamps for a given hive and threshold.
+
+    :param img_paths: DataFrame with timestamps as index, 4 columns corresponding to the 4 RPis and two rows corresponding to both timestamps.
+    :param threshold: int, pixel difference threshold to consider as activity
+    :param compute_diff_hives: bool, whether to compute and return the Hive object representing the difference between consecutive timestamps.
+    :return activity: tuple of (RpisActivity object, hive_diff Hive object) representing the differences between consecutive timestamps
+    '''
+
+    assert len(img_paths.columns) == 4, "img_paths must have 4 columns corresponding to the 4 RPis"
+    assert len(img_paths) == 2, "img_paths must have 2 rows corresponding to the two timestamps to compare"
+    assert type(img_paths.index[0]) == pd.Timestamp and type(img_paths.index[1]) == pd.Timestamp, "The index of img_paths must be of type pd.Timestamp"
+    assert img_paths.index[0] < img_paths.index[1], "The first row of img_paths should correspond to the earlier timestamp (t1) and the second row to the later timestamp (t2)"
+    hive_nb = int(img_paths.columns[0][1])  # Extract hive number from column name (assuming format "h{hive_nb}r{rpi_nb}")
+    assert all(col.startswith(f"h{hive_nb}r") for col in img_paths.columns), "All columns in img_paths must correspond to the same hive number and be in the format 'h{hive_nb}r{rpi_nb}'"
+
+    imgs1 = [cv2.imread(p, cv2.IMREAD_GRAYSCALE) if p is not None else None for p in img_paths.iloc[0]]
+    imgs2 = [cv2.imread(p, cv2.IMREAD_GRAYSCALE) if p is not None else None for p in img_paths.iloc[1]]
+
+    img_names1 = [img_paths.iloc[0][col].split(os.sep)[-1][:-4] if img_paths.iloc[0][col] is not None else None for col in img_paths.columns]
+    img_names2 = [img_paths.iloc[1][col].split(os.sep)[-1][:-4] if img_paths.iloc[1][col] is not None else None for col in img_paths.columns]
+
+    hive1 = Hive(img_paths.index[0], imgs1, False, img_names1, hive_nb=hive_nb)
+    hive2 = Hive(img_paths.index[1], imgs2, False, img_names2, hive_nb=hive_nb)
+
+    unique_imgs_1 = hive1.getUniqueRPiImages()
+    unique_imgs_2 = hive2.getUniqueRPiImages()
+    if verbose:
+        print(f"Unique images for hive1 at {hive1.ts}: {[img.shape for img in unique_imgs_1]}")
+        # Check if they are the same
+        for i in range(4):
+            # Check the shape first
+            if unique_imgs_1[i].shape != hive1.imgs[i].shape:
+                print(f"RPi {i} - unique image and pp image have different shapes: {unique_imgs_1[i].shape} vs {hive1.imgs[i].shape}")
+            elif unique_imgs_1[i] is not None and hive1.imgs[i] is not None:
+                print(f"RPi {i} - unique image and pp image are the same: {(unique_imgs_1[i] == hive1.imgs[i]).all()}")
+            else:
+                print(f"RPi {i} - unique image or pp image is None")
+
+    activity_values = []
+    if compute_diff_hives:
+        activity_masks = []
+    
+    for unique_img1, unique_img2 in zip(unique_imgs_1, unique_imgs_2):
+        if unique_img1 is None or unique_img2 is None:
+            activity_values.append(None)
+            if compute_diff_hives:
+                activity_masks.append(None)
+        else:
+            act, act_mask = activity(unique_img1, unique_img2, threshold, verbose)
+            activity_values.append(act)
+            if compute_diff_hives:
+                activity_masks.append(act_mask)
+
+    _activity = RpisActivity(hive2.ts, activity_values)
+
+    if compute_diff_hives:    
+        extended_activity_masks = []
+        for i, act_mask in enumerate(activity_masks):
+            if act_mask is None:
+                extended_activity_masks.append(None)
+                continue
+            if i in [0,2]:  # rpis 0 and 2 need padding on the bottom
+                pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
+                extended_mask = np.pad(act_mask, ((0, pad_height), (0, 0)), mode='constant', constant_values=0)
+            else:  # rpis 1 and 3 need padding on the top
+                pad_height = RPiCamV3_img_shape[0] - act_mask.shape[0]
+                extended_mask = np.pad(act_mask, ((pad_height, 0), (0, 0)), mode='constant', constant_values=0)
+            extended_activity_masks.append(extended_mask)
+        hive_diff = Hive(hive2.ts, extended_activity_masks, True, hive2.imgs_names, hive_nb=hive2.hive_nb)
+    else:
+        hive_diff = None
+    
+    return _activity, hive_diff
 
 def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity: # TODO: test this function
     '''
