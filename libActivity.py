@@ -282,7 +282,7 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
     '''
     Computes the RpisActivity for each timestamp in img_paths.
 
-    Also checks the resulting hive activity values for abnormally high outliers (using an IQR-based check: values above Q3 + 1.5*IQR) and, if any are found, prints a warning listing the median activity value and, for each offending activity, its timestamp and value.
+    Also checks each of the 4 RPis' activity values separately for abnormally high outliers (using an IQR-based check: values above Q3 + 1.5*IQR) and, if any are found, prints a warning per RPi listing the mean activity value and, for each offending activity, its timestamp and value.
 
     :param img_paths: DataFrame with timestamps as index and 4 columns corresponding to the 4 RPis, containing the image paths.
     :param threshold: int, pixel difference threshold to consider as activity
@@ -318,17 +318,20 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
             if compute_diff_hives:
                 diff_hives.append(None)
 
-    # Warn about abnormally high hive activity values (e.g. due to camera glare, misalignment,
-    # or other artifacts), using an IQR-based outlier check.
-    valid_activities = [a for a in activities if a is not None and a.hive_activity is not None]
-    hive_activities = np.array([a.hive_activity for a in valid_activities])
-    if len(hive_activities) > 0:
-        median = np.median(hive_activities)
-        q1, q3 = np.percentile(hive_activities, [25, 75])
+    # Warn about abnormally high activity values for each RPi separately (e.g. due to camera glare,
+    # misalignment, or other artifacts), using an IQR-based outlier check.
+    for rpi_idx in range(4):
+        rpi_values = [(a.ts, a.activity_values[rpi_idx]) for a in activities
+                      if a is not None and a.activity_values[rpi_idx] is not None]
+        if not rpi_values:
+            continue
+        values_arr = np.array([v for _, v in rpi_values])
+        mean = np.mean(values_arr)
+        q1, q3 = np.percentile(values_arr, [25, 75])
         upper_bound = q3 + 1.5 * (q3 - q1)
-        outliers = [(a.ts, a.hive_activity) for a in valid_activities if a.hive_activity > upper_bound]
+        outliers = [(ts, v) for ts, v in rpi_values if v > upper_bound]
         if outliers:
-            print(f"\033[91mWatch out, {len(outliers)} value(s) were abnormally big compared to all the values (median={median:.4f}, above {upper_bound:.4f}):\033[0m")
+            print(f"\033[91mWatch out, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
             for ts, value in outliers:
                 print(f"\033[91m  - {ts}: {value:.4f}\033[0m")
 
