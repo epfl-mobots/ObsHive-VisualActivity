@@ -284,7 +284,7 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
     Computes the RpisActivity for each timestamp in img_paths, by comparing pixel values across direct successors in the img_paths DataFrame.
     This means that if steps of 1 minute are used in img_paths, the activity will be computed between t and t+1min, for all timestamps in img_paths.
 
-    Also checks the resulting hive activity values for abnormally high outliers and prints a warning listing the timestamps of the offending activities.
+    Also checks the resulting hive activity values for abnormally high outliers and prints a warning listing the median activity value and, for each offending activity, its timestamp and value.
 
     :param img_paths: DataFrame with timestamps as index and 4 columns corresponding to the 4 RPis, containing the image paths.
     :param threshold: int, pixel difference threshold to consider as activity
@@ -325,13 +325,14 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
     valid_activities = [a for a in activities if a is not None and a.hive_activity is not None]
     hive_activities = np.array([a.hive_activity for a in valid_activities])
     if len(hive_activities) > 0:
+        median = np.median(hive_activities)
         q1, q3 = np.percentile(hive_activities, [25, 75])
         upper_bound = q3 + 1.5 * (q3 - q1)
-        outlier_timestamps = [a.ts for a in valid_activities if a.hive_activity > upper_bound]
-        if outlier_timestamps:
-            print(f"\033[91mWatch out, {len(outlier_timestamps)} value(s) were abnormally big compared to all the values (above {upper_bound:.4f}):\033[0m")
-            for ts in outlier_timestamps:
-                print(f"\033[91m  - {ts}\033[0m")
+        outliers = [(a.ts, a.hive_activity) for a in valid_activities if a.hive_activity > upper_bound]
+        if outliers:
+            print(f"\033[91mWatch out, {len(outliers)} value(s) were abnormally big compared to all the values (median={median:.4f}, above {upper_bound:.4f}):\033[0m")
+            for ts, value in outliers:
+                print(f"\033[91m  - {ts}: {value:.4f}\033[0m")
 
     return activities, diff_hives
 
