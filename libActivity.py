@@ -282,6 +282,8 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
     '''
     Computes the RpisActivity for each timestamp in img_paths.
 
+    Also checks the resulting hive activity values for abnormally high outliers and prints a warning listing the timestamps of the offending activities.
+
     :param img_paths: DataFrame with timestamps as index and 4 columns corresponding to the 4 RPis, containing the image paths.
     :param threshold: int, pixel difference threshold to consider as activity
     :param compute_diff_hives: bool, whether to compute and return the Hive objects representing the differences between consecutive timestamps. For large datasets, it might lead to memory issues.
@@ -315,6 +317,19 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
             activities.append(None)
             if compute_diff_hives:
                 diff_hives.append(None)
+
+    # Warn about abnormally high hive activity values (e.g. due to camera glare, misalignment,
+    # or other artifacts), using an IQR-based outlier check.
+    valid_activities = [a for a in activities if a is not None and a.hive_activity is not None]
+    hive_activities = np.array([a.hive_activity for a in valid_activities])
+    if len(hive_activities) > 0:
+        q1, q3 = np.percentile(hive_activities, [25, 75])
+        upper_bound = q3 + 1.5 * (q3 - q1)
+        outlier_timestamps = [a.ts for a in valid_activities if a.hive_activity > upper_bound]
+        if outlier_timestamps:
+            print(f"\033[91mWatch out, {len(outlier_timestamps)} value(s) were abnormally big compared to all the values (above {upper_bound:.4f}):\033[0m")
+            for ts in outlier_timestamps:
+                print(f"\033[91m  - {ts}\033[0m")
 
     return activities, diff_hives
 
