@@ -330,10 +330,11 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
         values_arr = np.array([v for _, v in rpi_values])
         mean = np.mean(values_arr)
         q1, q3 = np.percentile(values_arr, [25, 75])
-        upper_bound = q3 + 1.5 * (q3 - q1)
+        upper_bound = q3 + 3 * (q3 - q1)
         outliers = [(ts, v) for ts, v in rpi_values if v > upper_bound]
         if outliers:
-            print(f"\033[91mWatch out, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
+            hive_nb = int(img_paths.columns[0][1])
+            print(f"\033[91mWatch out, Hive {hive_nb}, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
             for ts, value in outliers:
                 print(f"\033[91m  - {ts}: {value:.4f}\033[0m")
 
