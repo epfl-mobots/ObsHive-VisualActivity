@@ -318,7 +318,10 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
 
 def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_hives:bool=False, verbose:bool=False)->tuple[list[RpisActivity], list[Hive]]:
     '''
-    Computes the RpisActivity for each timestamp in img_paths.
+    Computes the RpisActivity for each timestamp in img_paths, by comparing pixel values across direct successors in the img_paths DataFrame.
+    This means that if steps of 1 minute are used in img_paths, the activity will be computed between t and t+1min, for all timestamps in img_paths.
+
+    Also checks each of the 4 RPis' activity values separately for abnormally high outliers and prints a warning per RPi listing the mean activity value and, for each offending activity, its timestamp and value.
 
     :param img_paths: DataFrame with timestamps as index and 4 columns corresponding to the 4 RPis, containing the image paths.
     :param threshold: int, pixel difference threshold to consider as activity
@@ -353,6 +356,24 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
             activities.append(None)
             if compute_diff_hives:
                 diff_hives.append(None)
+
+    # Warn about abnormally high activity values for each RPi separately (e.g. due to camera glare,
+    # misalignment, or other artifacts), using an IQR-based outlier check.
+    for rpi_idx in range(4):
+        rpi_values = [(a.ts, a.activity_values[rpi_idx]) for a in activities
+                      if a is not None and a.activity_values[rpi_idx] is not None]
+        if not rpi_values:
+            continue
+        values_arr = np.array([v for _, v in rpi_values])
+        mean = np.mean(values_arr)
+        q1, q3 = np.percentile(values_arr, [25, 75])
+        upper_bound = q3 + 3 * (q3 - q1)
+        outliers = [(ts, v) for ts, v in rpi_values if v > upper_bound]
+        if outliers:
+            hive_nb = int(img_paths.columns[0][1])
+            print(f"\033[91mWatch out, Hive {hive_nb}, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
+            for ts, value in outliers:
+                print(f"\033[91m  - {ts}: {value:.4f}\033[0m")
 
     return activities, diff_hives
 
