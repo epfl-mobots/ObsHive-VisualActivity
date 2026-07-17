@@ -19,7 +19,8 @@ from abc import ABC, abstractmethod
 
 
 def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False, max_clipped_fraction:float=0.2,
-             min_gain:float=0.75, max_gain:float=1.25, max_bias:float=40.0):
+             min_gain:float=0.75, max_gain:float=1.25, max_bias:float=35.0,
+             adaptive_threshold:bool=True, reference_intensity:float=128.0):
     assert img_slice1.shape == img_slice2.shape, "Both image slices should have the same shape"
     if verbose:
         print(f"img_slice1 shape: {img_slice1.shape}, img_slice2 shape: {img_slice2.shape}")
@@ -61,8 +62,22 @@ def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False, max_clip
     img_slice2 = np.clip(img_slice2, 0, 255).astype(np.uint8)
 
     diff = cv2.absdiff(img_slice1, img_slice2)
-    # Define an activity mask based on the threshold
-    _, activity_mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+
+    if adaptive_threshold:
+        # A fixed absolute diff threshold is biased by exposure level: photon shot noise (the dominant
+        # noise source here) has a standard deviation that scales with sqrt(intensity), not a constant.
+        # So even after the gain/bias correction fixes the *mean* relationship between the two frames,
+        # brighter frames are still inherently noisier in absolute terms, meaning more pixels randomly
+        # cross a flat threshold - this is what shows up as "activity" increasing with exposure even
+        # without any real movement. Scaling the threshold by sqrt(local intensity / reference_intensity)
+        # keeps the noise-rejection level consistent across exposure levels.
+        local_intensity = np.maximum((img_slice1.astype(np.float32) + img_slice2.astype(np.float32)) / 2.0, 1.0)
+        threshold_map = threshold * np.sqrt(local_intensity / reference_intensity)
+        activity_mask = ((diff > threshold_map).astype(np.uint8)) * 255
+    else:
+        # Define an activity mask based on the (flat) threshold
+        _, activity_mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+
     if activity_mask is None:
         activity_mask = 0
     else:
