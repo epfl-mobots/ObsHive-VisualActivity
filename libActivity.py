@@ -383,7 +383,7 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
         mean = np.mean(values_arr)
         q1, q3 = np.percentile(values_arr, [25, 75])
         upper_bound = q3 + 4 * (q3 - q1)
-        outliers = [(ts, v) for ts, v in rpi_values if v > upper_bound]
+        outliers = [(ts, v) for ts, v in rpi_values if (v > upper_bound and v > 0.08)] # Only warn if the value is also above 8% to avoid false positives from very low activity values
         if outliers:
             hive_nb = int(img_paths.columns[0][1])
             print(f"\033[91mWatch out, Hive {hive_nb}, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
