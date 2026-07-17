@@ -329,7 +329,7 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
         values_arr = np.array([v for _, v in rpi_values])
         mean = np.mean(values_arr)
         q1, q3 = np.percentile(values_arr, [25, 75])
-        upper_bound = q3 + 3 * (q3 - q1)
+        upper_bound = q3 + 4 * (q3 - q1)
         outliers = [(ts, v) for ts, v in rpi_values if v > upper_bound]
         if outliers:
             hive_nb = int(img_paths.columns[0][1])
