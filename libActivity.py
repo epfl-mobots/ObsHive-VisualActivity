@@ -387,7 +387,7 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
         outliers = [(ts, v) for ts, v in rpi_values if v > upper_bound]
         if outliers:
             hive_nb = int(img_paths.columns[0][1])
-            print(f"\033[91mWatch out, Hive {hive_nb}, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
+            print(f"\033[91mHive {hive_nb}, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
             for ts, value in outliers:
                 print(f"\033[91m  - {ts}: {value:.4f}\033[0m")
 
