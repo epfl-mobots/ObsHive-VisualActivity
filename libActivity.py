@@ -112,9 +112,9 @@ class RpisActivity(Activity):
         '''
         Creates an RpisActivity object.
 
-        Nones in activity_values will spread to yield np.NaN in ihl_activity and hive_activity.
+        NaNs in activity_values will spread to yield NaN in ihl_activity and hive_activity.
         '''
-        assert len(activity_values) == 4, "activity_values must be a list of 4 floats (one per RPi), or None if no data for that RPi"
+        assert len(activity_values) == 4, "activity_values must be a list of 4 floats (one per RPi), or np.nan if no data for that RPi"
         super().__init__(ts)
         self.activity_values = activity_values  # List with 4 activity values for each RPi
         self.ihl_activity = self._aggregateActivity()
@@ -123,28 +123,28 @@ class RpisActivity(Activity):
     def _aggregateActivity(self)->dict:
         '''
         Aggregate the activity values across both RPis for each ihl.
-        
+
         :return: dict with heater names as keys and aggregated activity as values
         '''
         aggregated_activity = {"upper": 0.0, "lower":0.0}
         for ihl in aggregated_activity.keys():
             rpis = [0,2] if ihl == "upper" else [1,3]
             acts_values = [self.activity_values[rpi] for rpi in rpis]
-            if any(act is None for act in acts_values):
-                aggregated_activity[ihl] = None
+            if any(np.isnan(act) for act in acts_values):
+                aggregated_activity[ihl] = np.nan
             else:
                 aggregated_activity[ihl] = np.mean(acts_values)
 
         return aggregated_activity
-    
+
     def _aggregateHiveActivity(self)->float:
         '''
         Aggregate the activity values across both IHLs for the whole hive.
-        
+
         :return: float representing the aggregated activity for the whole hive
         '''
-        if any(act is None for act in self.activity_values):
-            return None
+        if any(np.isnan(act) for act in self.activity_values):
+            return np.nan
         else:
             return np.mean(self.activity_values)
 
@@ -255,7 +255,7 @@ def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, compute_diff_hives
     
     for unique_img1, unique_img2 in zip(unique_imgs_1, unique_imgs_2):
         if unique_img1 is None or unique_img2 is None:
-            activity_values.append(None)
+            activity_values.append(np.nan)
             if compute_diff_hives:
                 activity_masks.append(None)
         else:
@@ -377,7 +377,7 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
     # misalignment, or other artifacts), using an IQR-based outlier check.
     for rpi_idx in range(4):
         rpi_values = [(a.ts, a.activity_values[rpi_idx]) for a in activities
-                      if a is not None and a.activity_values[rpi_idx] is not None]
+                      if a is not None and not np.isnan(a.activity_values[rpi_idx])]
         if not rpi_values:
             continue
         values_arr = np.array([v for _, v in rpi_values])
