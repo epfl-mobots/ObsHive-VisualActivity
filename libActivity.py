@@ -11,6 +11,7 @@ import cv2, os
 import pandas as pd
 import numpy as np
 from dask import delayed, compute
+from dask.distributed import get_client, as_completed
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import seaborn as sns
@@ -331,7 +332,7 @@ def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr
     _activity = HtrsActivity(ts=hive2.ts, activity_values=activity_values)
     return _activity
 
-def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_hives:bool=False, verbose:bool=False)->tuple[list[RpisActivity], list[Hive]]:
+def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_hives:bool=False, verbose:bool=False, pbar=None)->tuple[list[RpisActivity], list[Hive]]:
     '''
     Computes the RpisActivity for each timestamp in img_paths, by comparing pixel values across direct successors in the img_paths DataFrame.
     This means that if steps of 1 minute are used in img_paths, the activity will be computed between t and t+1min, for all timestamps in img_paths.
@@ -342,6 +343,9 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
     :param threshold: int, pixel difference threshold to consider as activity
     :param compute_diff_hives: bool, whether to compute and return the Hive objects representing the differences between consecutive timestamps. For large datasets, it might lead to memory issues.
     :param verbose: bool, whether to print verbose output
+    :param pbar: optional tqdm instance, updated by one unit per image-pair as its activity is
+      computed. When a dask distributed client is active, this gives per-pair progress instead of
+      only advancing once all pairs of the whole call are done.
     :return: a tuple containing a list of RpisActivity objects and a list of Hive objects representing the differences between consecutive timestamps
     '''
     assert len(img_paths.columns) == 4, "img_paths must have 4 columns corresponding to the 4 RPis"
@@ -354,8 +358,24 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
         task = computeRpiActivity(pair_df, threshold, compute_diff_hives=compute_diff_hives, verbose=verbose)
         tasks.append(task)
 
-    # Compute the activites with dask
-    output = compute(*tasks)
+    try:
+        client = get_client()
+    except ValueError:
+        client = None  # No distributed client running, e.g. using the default local scheduler
+
+    if client is not None and pbar is not None:
+        # Submit tasks as futures and update pbar as each one completes, instead of blocking
+        # until the whole batch is done (order of results doesn't matter to callers below).
+        futures = client.compute(tasks)
+        output = []
+        for future in as_completed(futures):
+            output.append(future.result())
+            pbar.update(1)
+    else:
+        # Compute the activites with dask
+        output = compute(*tasks)
+        if pbar is not None:
+            pbar.update(len(tasks))
     activities = []
     if compute_diff_hives:
         diff_hives = []
@@ -386,7 +406,7 @@ def computeRpiActivities(img_paths:pd.DataFrame, threshold:int=25, compute_diff_
         outliers = [(ts, v) for ts, v in rpi_values if (v > upper_bound and v > 0.08)] # Only warn if the value is also above 8% to avoid false positives from very low activity values
         if outliers:
             hive_nb = int(img_paths.columns[0][1])
-            print(f"\033[91mWatch out, Hive {hive_nb}, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
+            print(f"\033[91mHive {hive_nb}, RPi {rpi_idx + 1}: {len(outliers)} value(s) were abnormally big compared to all the values (mean={mean:.4f}, above {upper_bound:.4f}):\033[0m")
             for ts, value in outliers:
                 print(f"\033[91m  - {ts}: {value:.4f}\033[0m")
 
