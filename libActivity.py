@@ -6,7 +6,7 @@ Initial date: 14/11/2025
 '''
 
 from RHCVisualisation.libvisu import Hive, exp_thermal_shifts
-from RHCVisualisation.RHCImaging.libimage import RPiCamV3_img_shape
+from RHCVisualisation.RHCImaging.libimage import RPiCamV3_img_shape, estimate_affine_exposure_correction
 import cv2, os
 import pandas as pd
 import numpy as np
@@ -19,13 +19,66 @@ from scipy.stats import ttest_rel
 from abc import ABC, abstractmethod
 
 
-def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False):
+def activity(img_slice1, img_slice2, threshold:int, verbose:bool=False, max_clipped_fraction:float=0.2,
+             min_gain:float=0.75, max_gain:float=1.25, max_bias:float=35.0,
+             adaptive_threshold:bool=True, reference_intensity:float=128.0):
     assert img_slice1.shape == img_slice2.shape, "Both image slices should have the same shape"
     if verbose:
         print(f"img_slice1 shape: {img_slice1.shape}, img_slice2 shape: {img_slice2.shape}")
+
+    # Reject pair if either image has too many clipped/saturated pixels (0 or 255). Saturation
+    # means the true pixel value was lost during capture, so no photometric correction can recover it -
+    # unlike slight exposure differences, this kind of mismatch is fundamentally unrecoverable.
+    clipped_frac1 = np.mean((img_slice1 == 0) | (img_slice1 == 255))
+    clipped_frac2 = np.mean((img_slice2 == 0) | (img_slice2 == 255))
+    if clipped_frac1 > max_clipped_fraction or clipped_frac2 > max_clipped_fraction:
+        if verbose:
+            print(f"Too many clipped/saturated pixels (frac1={clipped_frac1:.2%}, frac2={clipped_frac2:.2%}) "
+                  f"- exposure difference cannot be reliably corrected. Returning NaN.")
+        return np.nan, None
+
+    # Correct exposure differences between the two images with a robust affine (gain + bias) fit,
+    # rather than just matching means. Exposure changes act mostly as a multiplicative gain, so
+    # matching only the mean leaves contrast mismatches that create false activity. The fit is robust
+    # to real activity pixels since it iteratively discards the largest-residual pixels (see docstring).
+    gain, bias = estimate_affine_exposure_correction(img_slice1, img_slice2)
+    if verbose:
+        print(f"Estimated exposure correction: gain={gain:.3f}, bias={bias:.2f}")
+
+    # Reject pair if the exposure changed too much to trust the correction. A large gain means a
+    # large multiplicative exposure jump between the two frames; beyond a certain point, the affine fit
+    # is extrapolating over a much wider intensity range than it was estimated from (few/no pixels
+    # actually span both extremes), so the correction becomes unreliable rather than genuinely fixing
+    # the mismatch. Similarly, a large bias means a large additive brightness shift (e.g. veiling glare
+    # or a change in IR illumination) that isn't a simple exposure change either, so it's treated the
+    # same way.
+    if not (min_gain <= gain <= max_gain) or abs(bias) > max_bias:
+        if verbose:
+            print(f"Estimated correction (gain={gain:.3f}, bias={bias:.2f}) is outside the trusted range "
+                  f"(gain in [{min_gain}, {max_gain}], |bias| <= {max_bias}) - exposure difference is too "
+                  f"large to correct reliably. Returning NaN.")
+        return np.nan, None
+
+    img_slice2 = img_slice2.astype(np.float32) * gain + bias
+    img_slice2 = np.clip(img_slice2, 0, 255).astype(np.uint8)
+
     diff = cv2.absdiff(img_slice1, img_slice2)
-    # Define an activity mask based on the threshold
-    _, activity_mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+
+    if adaptive_threshold:
+        # A fixed absolute diff threshold is biased by exposure level: photon shot noise (the dominant
+        # noise source here) has a standard deviation that scales with sqrt(intensity), not a constant.
+        # So even after the gain/bias correction fixes the *mean* relationship between the two frames,
+        # brighter frames are still inherently noisier in absolute terms, meaning more pixels randomly
+        # cross a flat threshold - this is what shows up as "activity" increasing with exposure even
+        # without any real movement. Scaling the threshold by sqrt(local intensity / reference_intensity)
+        # keeps the noise-rejection level consistent across exposure levels.
+        local_intensity = np.maximum((img_slice1.astype(np.float32) + img_slice2.astype(np.float32)) / 2.0, 1.0)
+        threshold_map = threshold * np.sqrt(local_intensity / reference_intensity)
+        activity_mask = ((diff > threshold_map).astype(np.uint8)) * 255
+    else:
+        # Define an activity mask based on the (flat) threshold
+        _, activity_mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+
     if activity_mask is None:
         activity_mask = 0
     else:
@@ -59,9 +112,9 @@ class RpisActivity(Activity):
         '''
         Creates an RpisActivity object.
 
-        Nones in activity_values will spread to yield np.NaN in ihl_activity and hive_activity.
+        NaNs in activity_values will spread to yield NaN in ihl_activity and hive_activity.
         '''
-        assert len(activity_values) == 4, "activity_values must be a list of 4 floats (one per RPi), or None if no data for that RPi"
+        assert len(activity_values) == 4, "activity_values must be a list of 4 floats (one per RPi), or np.nan if no data for that RPi"
         super().__init__(ts)
         self.activity_values = activity_values  # List with 4 activity values for each RPi
         self.ihl_activity = self._aggregateActivity()
@@ -70,28 +123,28 @@ class RpisActivity(Activity):
     def _aggregateActivity(self)->dict:
         '''
         Aggregate the activity values across both RPis for each ihl.
-        
+
         :return: dict with heater names as keys and aggregated activity as values
         '''
         aggregated_activity = {"upper": 0.0, "lower":0.0}
         for ihl in aggregated_activity.keys():
             rpis = [0,2] if ihl == "upper" else [1,3]
             acts_values = [self.activity_values[rpi] for rpi in rpis]
-            if any(act is None for act in acts_values):
-                aggregated_activity[ihl] = None
+            if any(np.isnan(act) for act in acts_values):
+                aggregated_activity[ihl] = np.nan
             else:
                 aggregated_activity[ihl] = np.mean(acts_values)
 
         return aggregated_activity
-    
+
     def _aggregateHiveActivity(self)->float:
         '''
         Aggregate the activity values across both IHLs for the whole hive.
-        
+
         :return: float representing the aggregated activity for the whole hive
         '''
-        if any(act is None for act in self.activity_values):
-            return None
+        if any(np.isnan(act) for act in self.activity_values):
+            return np.nan
         else:
             return np.mean(self.activity_values)
 
@@ -202,7 +255,7 @@ def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, compute_diff_hives
     
     for unique_img1, unique_img2 in zip(unique_imgs_1, unique_imgs_2):
         if unique_img1 is None or unique_img2 is None:
-            activity_values.append(None)
+            activity_values.append(np.nan)
             if compute_diff_hives:
                 activity_masks.append(None)
         else:
