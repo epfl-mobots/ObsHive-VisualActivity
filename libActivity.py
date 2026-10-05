@@ -285,7 +285,7 @@ def computeRpiActivity(img_paths:pd.DataFrame, threshold:int, compute_diff_hives
     
     return _activity, hive_diff
 
-def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity: # TODO: test this function
+def computeActivitySingleHtr(hive1:Hive, hive2:Hive, threshold:int, ihl:str, htr:str, verbose:bool=False)->HtrsActivity:
     '''
     Computes the visual activity between two Hive objects for the specified ihl and heater.
 
